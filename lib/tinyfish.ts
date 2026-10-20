@@ -6,7 +6,6 @@ const DEFAULT_SEARCH_BASE_URL = "https://api.search.tinyfish.ai";
 const DEFAULT_FETCH_BASE_URL = "https://api.fetch.tinyfish.ai";
 
 export interface TinyFishSearchResult {
-  position?: number;
   siteName?: string;
   title: string;
   snippet: string;
@@ -17,15 +16,11 @@ export interface TinyFishSearchResult {
 export interface TinyFishSearchResponse {
   query: string;
   results: TinyFishSearchResult[];
-  totalResults: number;
-  page: number;
 }
 
 export interface TinyFishFetchedPage {
   url: string;
   finalUrl?: string;
-  title?: string;
-  description?: string;
   text: string;
 }
 
@@ -67,12 +62,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function asNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value)
-    ? value
-    : undefined;
 }
 
 async function fetchWithTimeout(
@@ -147,7 +136,6 @@ async function parseJsonResponse(
 export interface SearchTinyFishInput {
   query: string;
   purpose?: string;
-  includeDomains?: string[];
 }
 
 export async function searchTinyFish(
@@ -169,9 +157,6 @@ export async function searchTinyFish(
   if (input.purpose) {
     url.searchParams.set("purpose", input.purpose.slice(0, 2000));
   }
-  if (input.includeDomains && input.includeDomains.length > 0) {
-    url.searchParams.set("include_domains", input.includeDomains.join(","));
-  }
 
   const response = await fetchWithTimeout(
     url.toString(),
@@ -182,7 +167,7 @@ export async function searchTinyFish(
         "X-API-Key": apiKey,
       },
     },
-    20_000,
+    15_000,
     "TinyFish Search"
   );
 
@@ -198,7 +183,6 @@ export async function searchTinyFish(
 
     return [
       {
-        position: asNumber(item.position),
         siteName: asString(item.site_name),
         title: asString(item.title) ?? resultUrl,
         snippet: asString(item.snippet) ?? "",
@@ -211,8 +195,6 @@ export async function searchTinyFish(
   return {
     query: asString(data.query) ?? input.query,
     results,
-    totalResults: asNumber(data.total_results) ?? results.length,
-    page: asNumber(data.page) ?? 0,
   };
 }
 
@@ -276,8 +258,6 @@ export async function fetchTinyFishContents(
       {
         url: resultUrl,
         finalUrl: asString(item.final_url),
-        title: asString(item.title),
-        description: asString(item.description),
         text,
       },
     ];

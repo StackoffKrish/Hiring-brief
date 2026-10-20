@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
 import {
   GeminiError,
+  getGeminiFallbackModel,
   getGeminiModel,
   isGeminiConfigured,
   summarizeWithGemini,
+  type GeminiSummaryResult,
 } from "@/lib/gemini";
 import {
-  PRIORITY_SITES,
   buildSearchPurpose,
   buildSearchQuery,
   buildSummaryPrompt,
@@ -23,8 +24,18 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
-const CONTEXT_SOURCE_COUNT = 8;
-const FETCH_SOURCE_COUNT = 5;
+const CONTEXT_SOURCE_COUNT = 6;
+const FETCH_SOURCE_COUNT = 4;
+const OVERALL_BUDGET_MS = 110_000;
+
+function timeoutWithinBudget(
+  startedAt: number,
+  preferredMs: number,
+  minimumMs = 15_000
+): number {
+  const remainingMs = OVERALL_BUDGET_MS - (Date.now() - startedAt);
+  return Math.max(minimumMs, Math.min(preferredMs, remainingMs));
+}
 
 function getMissingConfig(): string[] {
   const missing: string[] = [];
@@ -50,6 +61,7 @@ export async function GET() {
         gemini: isGeminiConfigured(),
       },
       model: getGeminiModel(),
+      fallbackModel: getGeminiFallbackModel(),
     },
     { headers: { "Cache-Control": "no-store" } }
   );
@@ -153,13 +165,17 @@ export async function POST(request: Request) {
   }
 
   const warnings: string[] = [];
+  const startedAt = Date.now();
 
   try {
     const query = buildSearchQuery(input);
     const search = await searchTinyFish({
       query,
       purpose: buildSearchPurpose(input),
-      includeDomains: PRIORITY_SITES.length > 0 ? PRIORITY_SITES : undefined,
+    });
+    console.info("[brief] TinyFish Search completed", {
+      durationMs: Date.now() - startedAt,
+      resultCount: search.results.length,
     });
 
     if (search.results.length === 0) {
@@ -202,6 +218,11 @@ export async function POST(request: Request) {
         "Could not fetch full page content, so the summary is based on search snippets."
       );
     }
+    console.info("[brief] TinyFish Fetch completed", {
+      durationMs: Date.now() - startedAt,
+      fetchedCount,
+      requestedCount: fetchUrls.length,
+    });
 
     const promptSources = contextResults.map((result) => ({
       title: result.title,
@@ -210,12 +231,69 @@ export async function POST(request: Request) {
       content: fetchedByUrl.get(result.url) ?? result.snippet,
     }));
 
-    const summary = await summarizeWithGemini(
-      buildSummaryPrompt(input, promptSources)
-    );
+    const primaryPrompt = buildSummaryPrompt(input, promptSources);
+    let geminiResult: GeminiSummaryResult;
+    let geminiAttempt: "primary" | "fallback" = "primary";
+
+    try {
+      geminiResult = await summarizeWithGemini(primaryPrompt, {
+        timeoutMs: timeoutWithinBudget(startedAt, 45_000),
+        maxOutputTokens: 4_096,
+      });
+    } catch (error) {
+      if (!(error instanceof GeminiError) || !error.retryable) {
+        throw error;
+      }
+
+      const primaryModel = getGeminiModel();
+      const fallbackModel = getGeminiFallbackModel();
+      console.error("[brief] Primary gemini attempt failed; using fallback", {
+        primaryModel,
+        fallbackModel,
+        message: error.message,
+        promptChars: primaryPrompt.length,
+        durationMs: Date.now() - startedAt,
+      });
+      warnings.push(
+        `The primary AI model (${primaryModel}) was slow or unavailable, so a faster fallback model (${fallbackModel}) summarised a compact version of the sources.`
+      );
+
+      const compactPrompt = buildSummaryPrompt(input, promptSources, {
+        maxCharsPerSource: 1_000,
+        maxTotalChars: 4_000,
+        maxSources: 4,
+      });
+
+      try {
+        geminiResult = await summarizeWithGemini(compactPrompt, {
+          model: fallbackModel,
+          timeoutMs: timeoutWithinBudget(startedAt, 30_000),
+          maxOutputTokens: 2_048,
+        });
+        geminiAttempt = "fallback";
+      } catch (fallbackError) {
+        if (fallbackError instanceof GeminiError) {
+          throw new GeminiError(
+            `Primary model failed: ${error.message} Fallback model also failed: ${fallbackError.message}`,
+            {
+              status: fallbackError.status ?? error.status,
+              retryable: fallbackError.retryable,
+            }
+          );
+        }
+        throw fallbackError;
+      }
+    }
+
+    console.info("[brief] gemini summary completed", {
+      durationMs: Date.now() - startedAt,
+      model: geminiResult.model,
+      attempt: geminiAttempt,
+      promptChars: primaryPrompt.length,
+    });
 
     return NextResponse.json({
-      summary,
+      summary: geminiResult.text,
       sources: contextResults.map((result) => ({
         title: result.title,
         url: result.url,
@@ -229,9 +307,11 @@ export async function POST(request: Request) {
         role: input.role ?? null,
         location: input.location ?? null,
         query: search.query,
-        model: getGeminiModel(),
+        model: geminiResult.model,
+        geminiAttempt,
         searchResultCount: search.results.length,
         fetchedCount,
+        durationMs: Date.now() - startedAt,
         warnings,
         generatedAt: new Date().toISOString(),
       },

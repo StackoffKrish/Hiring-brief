@@ -23,8 +23,7 @@ The app reads API keys from `.env.local`. No keys are stored in source code.
 cp .env.example .env.local
 ```
 
-A blank `.env.local` is already included in this workspace — you can also
-just open it and fill in the two keys.
+Then open `.env.local` and fill in the two keys.
 
 ### 2. Get a TinyFish API key
 
@@ -53,11 +52,17 @@ Both use the `X-API-Key: $TINYFISH_API_KEY` header.
 
 ```bash
 GEMINI_API_KEY=your_gemini_key_here
-GEMINI_MODEL=gemini-3.8-flash
+GEMINI_MODEL=gemini-3.5-flash-lite
+GEMINI_FALLBACK_MODEL=gemini-3.5-flash-lite
 ```
 
-If your key/project doesn't have access to that model, change
-`GEMINI_MODEL` to a Flash model available to your account.
+Use the fast Flash-Lite model for this summarisation step. A slower
+high-thinking model can time out when it is given several fetched web
+pages. If your key/project doesn't have access to Flash-Lite, change
+both model values to another low-latency Flash model available to your
+account. The app automatically uses minimal thinking for Flash-Lite
+and low thinking for other Gemini 3/4 models unless
+`GEMINI_THINKING_LEVEL` is set.
 
 ### 4. Restart the dev server
 
@@ -79,7 +84,8 @@ for example:
   "configured": true,
   "missing": [],
   "services": { "tinyfish": true, "gemini": true },
-  "model": "gemini-3.8-flash"
+  "model": "gemini-3.5-flash-lite",
+  "fallbackModel": "gemini-3.5-flash-lite"
 }
 ```
 
@@ -96,14 +102,17 @@ On `/dashboard`, enter a company (required), role, and location, then click
 2. `lib/prompts.ts` builds the TinyFish search query + purpose
 3. `lib/tinyfish.ts` runs TinyFish **Search**, then TinyFish **Fetch** on the
    top results (best effort — falls back to search snippets if fetch fails)
-4. `lib/prompts.ts` builds a free-form summary prompt from the fetched text
-5. `lib/gemini.ts` asks gemini to summarise only those sources, with `[1]`,
-   `[2]` style citations
+4. `lib/prompts.ts` builds a compact free-form summary prompt from the
+   fetched text (top sources only, capped per source and in total)
+5. `lib/gemini.ts` asks a fast gemini model with minimal/low thinking to
+   summarise only those sources, with `[1]`, `[2]` style citations. If
+   that attempt times out or returns a retryable provider error, the API
+   automatically retries with `GEMINI_FALLBACK_MODEL` and an even more
+   compact prompt
 6. The dashboard shows the AI summary plus the source list
 
-Current output is intentionally a **free-form summary only**. A strict
-output structure will be enforced later — see `MASTER_JSON_PROMPT` in
-`lib/prompts.ts`.
+Current output is intentionally a **free-form summary only**; no strict
+output structure is enforced yet.
 
 ### API
 
@@ -126,9 +135,24 @@ Successful response shape:
   "sources": [
     { "title": "...", "url": "...", "siteName": "...", "snippet": "...", "fetched": true }
   ],
-  "meta": { "company": "Google", "query": "...", "model": "gemini-3.8-flash", "fetchedCount": 4 }
+  "meta": { "company": "Google", "query": "...", "model": "gemini-3.5-flash-lite", "geminiAttempt": "primary", "fetchedCount": 4 }
 }
 ```
+
+### Troubleshooting: “gemini timed out”
+
+This usually means the configured model spent too long thinking over a
+large prompt. Check:
+
+1. `GET /api/brief` shows a fast model such as
+   `gemini-3.5-flash-lite` for both `model` and `fallbackModel`
+2. `.env.local` does not still contain an old slower value such as
+   `GEMINI_MODEL=gemini-3.8-flash`
+3. You restarted the dev server after changing `.env.local`
+4. The terminal logs. Search for `[brief]`: they show how long TinyFish
+   Search, TinyFish Fetch, and gemini each took, whether the fallback
+   was used, and how large the prompt was, without logging secrets or
+   source content
 
 ## Run
 
@@ -160,7 +184,6 @@ Then open http://localhost:3000
     Pricing.tsx
     About.tsx
   /dashboard
-    FloatingNav.tsx         -> floating pill nav with 3 placeholder options
     SearchBar.tsx           -> company/role/location + Generate + AI output
   /ui                       -> shadcn/ui components
 
@@ -169,7 +192,7 @@ Then open http://localhost:3000
   supabase/server.ts        -> stub (TODO — skipped for this step)
   tinyfish.ts               -> TinyFish Search + Fetch service
   gemini.ts                 -> gemini AI summary service
-  prompts.ts                -> search/summary prompts (strict JSON later)
+  prompts.ts                -> search/summary prompts
   utils.ts                  -> shadcn/ui `cn()` helper
 ```
 

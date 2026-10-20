@@ -1,4 +1,3 @@
-import FloatingNav from "@/components/dashboard/FloatingNav";
 import SearchBar from "@/components/dashboard/SearchBar";
 
 export default function DashboardPage() {
@@ -13,10 +12,6 @@ export default function DashboardPage() {
         </p>
 
         <div className="mt-12">
-          <FloatingNav />
-        </div>
-
-        <div className="mt-8">
           <SearchBar />
         </div>
       </div>

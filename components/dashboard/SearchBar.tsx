@@ -8,6 +8,8 @@ import {
   LoaderCircle,
   Sparkles,
 } from "lucide-react";
+import ReactMarkdown, { type Components } from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 interface ConfigStatus {
   configured: boolean;
@@ -20,7 +22,6 @@ interface BriefSource {
   url: string;
   siteName: string | null;
   snippet: string;
-  date: string | null;
   fetched: boolean;
 }
 
@@ -31,12 +32,9 @@ interface BriefResult {
     company: string;
     role: string | null;
     location: string | null;
-    query: string;
     model: string;
-    searchResultCount: number;
     fetchedCount: number;
     warnings: string[];
-    generatedAt: string;
   };
 }
 
@@ -58,6 +56,47 @@ function isBriefResult(value: unknown): value is BriefResult {
     isRecord(value.meta)
   );
 }
+
+/**
+ * gemini sometimes wraps the whole answer in a single ```markdown fence.
+ * Unwrap only that outer fence so the content renders in reading mode
+ * instead of appearing as one raw code block. Real code blocks inside
+ * the answer are preserved.
+ */
+function normalizeMarkdown(markdown: string): string {
+  const trimmed = markdown.trim();
+  const fenced = trimmed.match(
+    /^```(?:markdown|md|text)?\s*\n([\s\S]*?)\n```$/
+  );
+  return fenced ? fenced[1].trim() : markdown;
+}
+
+const markdownComponents: Components = {
+  a: ({ href, children }) => {
+    const isExternal = href?.startsWith("http://") || href?.startsWith("https://");
+
+    return (
+      <a
+        href={href}
+        {...(isExternal
+          ? { target: "_blank", rel: "noreferrer" }
+          : {})}
+      >
+        {children}
+      </a>
+    );
+  },
+  table: ({ children }) => (
+    <div className="overflow-x-auto">
+      <table>{children}</table>
+    </div>
+  ),
+  img: ({ alt }) => (
+    <span className="my-3 block rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-500">
+      {alt ? `Image: ${alt}` : "Image omitted"}
+    </span>
+  ),
+};
 
 const inputClassName =
   "h-10 w-full rounded-md border border-gray-200 bg-white px-3 text-sm text-black placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-gray-400 disabled:cursor-not-allowed disabled:bg-gray-50";
@@ -282,7 +321,9 @@ export default function SearchBar() {
             summary...
           </div>
           <p className="mt-2 text-sm text-gray-500">
-            This can take up to a minute while pages are fetched.
+            This usually takes under a minute. If the AI model is slow, the
+            app automatically retries with a faster fallback model and a
+            compact prompt.
           </p>
           <div className="mt-6 animate-pulse space-y-3">
             <div className="h-4 w-3/4 rounded bg-gray-100" />
@@ -340,9 +381,14 @@ export default function SearchBar() {
             </div>
           ) : null}
 
-          <div className="mt-6 whitespace-pre-wrap text-[15px] leading-7 text-gray-800">
-            {result.summary}
-          </div>
+          <article className="prose prose-neutral mt-6 max-w-none text-[15px] leading-7 text-gray-800 prose-headings:font-semibold prose-headings:tracking-tight prose-headings:text-black prose-h1:text-2xl prose-h2:mt-8 prose-h2:border-b prose-h2:border-gray-200 prose-h2:pb-2 prose-h2:text-xl prose-h3:mt-6 prose-h3:text-base prose-p:my-3 prose-p:leading-7 prose-strong:font-semibold prose-strong:text-black prose-a:font-medium prose-a:text-blue-700 prose-a:no-underline hover:prose-a:underline prose-blockquote:border-gray-300 prose-blockquote:text-gray-600 prose-code:rounded prose-code:bg-gray-100 prose-code:px-1 prose-code:py-0.5 prose-code:font-normal prose-code:text-gray-900 prose-code:before:content-none prose-code:after:content-none prose-pre:overflow-x-auto prose-pre:bg-gray-950 prose-pre:text-gray-100 prose-hr:border-gray-200 prose-table:my-4 prose-th:border prose-th:border-gray-200 prose-th:bg-gray-50 prose-th:px-3 prose-th:py-2 prose-td:border prose-td:border-gray-200 prose-td:px-3 prose-td:py-2">
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={markdownComponents}
+            >
+              {normalizeMarkdown(result.summary)}
+            </ReactMarkdown>
+          </article>
 
           {result.sources.length > 0 ? (
             <div className="mt-8 border-t border-gray-200 pt-6">
