@@ -1,5 +1,5 @@
+import FloatingNav from "@/components/dashboard/FloatingNav";
 import SearchBar from "@/components/dashboard/SearchBar";
-import ResultTabs from "@/components/dashboard/ResultTabs";
 
 export default function DashboardPage() {
   return (
@@ -12,9 +12,12 @@ export default function DashboardPage() {
           Search a company to generate an interview brief.
         </p>
 
-        <div className="mt-10 space-y-8">
+        <div className="mt-12">
+          <FloatingNav />
+        </div>
+
+        <div className="mt-8">
           <SearchBar />
-          <ResultTabs />
         </div>
       </div>
     </main>
